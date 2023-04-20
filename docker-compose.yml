@@ -1,0 +1,106 @@
+version: '3.8'
+
+networks:
+  monitor-net:
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  nginx_data:
+
+services:
+  grafana:
+    image: grafana/grafana:9.1.1
+    container_name: grafana
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+    env_file:
+      - config
+    restart: always
+    expose:
+      - 3000
+    networks:
+      - monitor-net
+
+  prometheus:
+    image: prom/prometheus:v2.38.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    restart: always
+    expose:
+      - 9090
+    networks:
+      - monitor-net
+      - default
+    depends_on:
+      - nginxexporter
+
+  nginxexporter:
+    image: nginx/nginx-prometheus-exporter:0.11
+    container_name: nginxexporter
+    command:
+      - -nginx.scrape-uri=http://nginx:80/stub_status
+    networks:
+      - monitor-net
+    expose:
+      - 9113
+    depends_on:
+      - nginx
+
+  nginx:
+    image: nginx:1.23.4-alpine-slim
+    container_name: nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_data:/var/log/nginx
+      - /var/log/nginx/:/var/log/nginx/
+    ports:
+      - 80:80
+      - 443:443
+    expose:
+      - 80
+    networks:
+      - monitor-net
+
+  fluentd:
+    image: fluent/fluentd:v1.14-1
+    container_name: fluentd
+    user: root
+    volumes:
+      - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf:ro
+      - /var/log/nginx:/var/log/nginx
+    command: ["sh", "-c", "gem install fluent-plugin-prometheus && fluentd -c /fluentd/etc/fluent.conf"]
+    environment:
+      - FLUENTD_CONF=fluent.conf
+    restart: always
+    networks:
+      - monitor-net
+
+  caddy:
+    image: caddy:2.3.0
+    container_name: caddy
+    ports:
+      - "3000:3000"
+      - "9090:9090"
+      - "9113:9113"
+      - "24224:24224"
+    volumes:
+      - ./caddy:/etc/caddy
+    environment:
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-JDJhJDE0JE91S1FrN0Z0VEsyWmhrQVpON1VzdHVLSDkyWHdsN0xNbEZYdnNIZm1pb2d1blg4Y09mL0ZP}
+    restart: always
+    networks:
+      - monitor-net
